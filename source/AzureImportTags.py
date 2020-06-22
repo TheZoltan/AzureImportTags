@@ -21,13 +21,13 @@ from msrestazure.azure_exceptions import CloudError
 # Main, start here
 def main():
 
-    print('Azure Import Tags Util v1.2')
+    print('Azure Import Tags Util v1.3')
 
     # Check that we have args
-    if (len(sys.argv) < 9):
+    if (len(sys.argv) < 10):
         print('YOU MUST SPECIFY THE CORRECT COMMAND LINE PARAMETERS:')
         print('Usage:')
-        print('azureimporttags.py [input_file] [migrated_from] [migrate_project] [azure_region] [subscriptiom] [client_id] [secret] [tenant]')
+        print('azureimporttags.py [vm_input_file] [input_file] [migrated_from] [migrate_project] [azure_region] [subscriptiom] [client_id] [secret] [tenant]')
         print('NOTE: the migrated_from field should contain one of these values:')
         print('  On Premise')
         print('  AWS')
@@ -40,6 +40,17 @@ def main():
 
     # Get command line args
     if (sys.argv[0] == 'python'):
+        vm_input_file = sys.argv[2]
+        inputfile = sys.argv[3]
+        migrated_from = sys.argv[4]
+        migrate_project = sys.argv[5]
+        region = sys.argv[6]
+        sub_id = sys.argv[7]
+        client_id = sys.argv[8]
+        secret = sys.argv[9]
+        tenant = sys.argv[10]
+    else:
+        vm_input_file = sys.argv[1]
         inputfile = sys.argv[2]
         migrated_from = sys.argv[3]
         migrate_project = sys.argv[4]
@@ -48,17 +59,9 @@ def main():
         client_id = sys.argv[7]
         secret = sys.argv[8]
         tenant = sys.argv[9]
-    else:
-        inputfile = sys.argv[1]
-        migrated_from = sys.argv[2]
-        migrate_project = sys.argv[3]
-        region = sys.argv[4]
-        sub_id = sys.argv[5]
-        client_id = sys.argv[6]
-        secret = sys.argv[7]
-        tenant = sys.argv[8]
 
 
+    print('VM List file:   ', vm_input_file)
     print('Inputfile:      ', inputfile)
     print('Region:         ', region)
     print('MigrateProject: ', migrate_project)
@@ -71,6 +74,7 @@ def main():
     # Start logging
     updatelog('------ Starting run ------')
     updatelog('Region: ', region)
+
 
     # If not a valid migrated_from field, abort with error
     migrated_from_cases = {
@@ -112,17 +116,20 @@ def main():
     updatelog('Calling loadrecordsfromfile()')
     loadrecordsfromfile(inputfile, taglist)
 
+    # Get VM input list file
+    target_vm_list = get_target_vm_list(vm_input_file)
 
     # Get list of all Azure VMs and add to list
-    az_vm_list = []
+    #az_vm_list = []
     updatelog('Calling getallazvms()')
-    getallazvms(compute_client, az_vm_list)
+    #getallazvms(compute_client, az_vm_list, target_vm_list)
+    az_vm_list = getallazvms(compute_client, target_vm_list)
 
     print('VMs: ', az_vm_list)
 
     # Tag'em
     updatelog('Calling tageachvm()')
-    tageachvm(credentials, subscription_id, compute_client, migrated_from, migrate_project, region, taglist, az_vm_list)
+    tageachvmfromlist(credentials, subscription_id, compute_client, migrated_from, migrate_project, region, taglist, az_vm_list)
 
     updatelog('------ Exiting ------')
 
@@ -143,6 +150,15 @@ def updatelog(*argv):
 
     logfile.writelines('\n')
     logfile.close()
+
+
+# Get list of target VMs
+def get_target_vm_list(vm_input_file):
+
+    with open(vm_input_file) as f:
+        target_vm_list = [line.rstrip() for line in f]
+
+    return target_vm_list
 
 
 # If success, write to success file, if error, then write to error file
@@ -209,6 +225,60 @@ def tagyoureit(credentials, subscription_id, compute_client, migrated_from, migr
 
     updatelog('Tags for VM ', VMName, ' were updated')
 
+
+# Tag each vm that is in the az_vm_list
+def tageachvmfromlist(credentials, subscription_id, compute_client, migrated_from, migrate_project, region, taglist, az_vm_list):
+
+    # Check params
+    if (region == ''):
+        updatelog('ERROR: in tageachvm() NULL region')
+
+    print('----- in tageachvmfromlist() -----')
+
+    # Search taglist for name= attribute that matches each az_vm_list element
+    for vm_name in az_vm_list:
+        print('Searching for ', vm_name, '...')
+
+        for tagline in taglist:
+
+            counter = 0
+            #for taglistitem in taglist[counter]:
+            for taglistitem in tagline:
+                #print('Item: ', taglistitem)
+
+                dictkey = taglistitem['Key']
+                if (dictkey == 'Name'):
+                    list_name = taglistitem['Value']
+                    #print('Compare: ', list_name.upper(), ' List:', vm_name.upper())
+
+                    if (list_name.upper() == vm_name.upper()):
+                        print('Found record: ', vm_name)
+                        print('Tags: ', taglist[counter])
+
+                        # Do the work...
+                        # Validate that this is a valid VM name and get the VM's resource group
+                        resourcegroup = validatetagvms(compute_client, taglist, az_vm_list, vm_name)
+
+                        # If no resource group found, then that's a problem. we need to fail this record
+                        if (resourcegroup != ''):
+
+                            print('Resource group (tageachvm): ', resourcegroup)
+                            if (resourcegroup == ''):
+                                updatelog('ERROR: empty resource group name in tageachvm()')
+
+                            updatelog('Resource group for ', list_name, ' is ', resourcegroup)
+
+                            # Tag this VM with this record
+                            tagyoureit(credentials, subscription_id, compute_client, migrated_from, migrate_project,
+                                       region, vm_name, resourcegroup, tagline)
+
+                        else:
+                            print('Error: no resource group was found for this VM:', vm_name)
+                            updatelog('ERROR: no resource group was found for this VM! (', vm_name, ')')
+                            writetosuccessfaillog(vm_name, 'FAILED')
+
+
+                counter += 1
 
 
 # List each tag for this VM
@@ -297,9 +367,10 @@ def validatetagvms(compute_client, taglist, az_vm_list, VMName):
 
 
 # Iterate through all VMs....
-def getallazvms(compute_client, az_vm_list):
+def getallazvms(compute_client, target_vm_list):
 
     vm_list = compute_client.virtual_machines.list_all()
+    az_vm_list = []
 
     i = 0
     for vm in vm_list:
@@ -311,9 +382,15 @@ def getallazvms(compute_client, az_vm_list):
 
         #print(vm_name)
 
-        az_vm_list.append(vm_name)
+
+        if (vm_name.upper() in (name.upper() for name in target_vm_list)):
+            print('Adding ', vm_name, ' to list')
+            az_vm_list.append(vm_name)
+        else:
+            print('VM not in list ', vm_name)
 
 
+    return az_vm_list
 
 
 # Reads file and loads tags into memory
