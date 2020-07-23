@@ -21,7 +21,7 @@ from msrestazure.azure_exceptions import CloudError
 # Main, start here
 def main():
 
-    print('Azure Import Tags Util v1.3')
+    print('Azure Import Tags Util v1.4')
 
     # Check that we have args
     if (len(sys.argv) < 10):
@@ -253,7 +253,7 @@ def tageachvmfromlist(credentials, subscription_id, compute_client, migrated_fro
 
                     if (list_name.upper() == vm_name.upper()):
                         print('Found record: ', vm_name)
-                        print('Tags: ', taglist[counter])
+                        #print('Tags: ', taglist[counter])  - NOTE: this generates an error!
 
                         # Do the work...
                         # Validate that this is a valid VM name and get the VM's resource group
